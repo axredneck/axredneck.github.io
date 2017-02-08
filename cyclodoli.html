@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Three.js Cyclodoli</title>
+		<!-- типа #include <three.js>, это такая знаменитая библиотека для 3Д-графики -->
+		<script type="text/javascript"
+			src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r71/three.min.js">
+		</script>
+	<style>
+		body{
+			/* set margin to 0 and overflow to hidden, 
+			to use the complete page */
+			margin: 0;
+			overflow: hidden;
+		}
+	</style>
+	</head>
+	<body>
+		<!-- ////////////////////////////////////////////////////////////////// -->
+		<script id="vertexShader" type="x-shader/x-vertex">
+			varying vec2 coords;
+			void main() {
+				gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+				coords = uv * 2.0 - 1.0;  // преобразуем из [0..1] в [-1..1]
+			}
+		</script>
+
+		<!-- ////////////////////////////////////////////////////////////////// -->
+		<script id="fragmentShader" type="x-shader/x-fragment">
+			#ifdef GL_ES
+			precision highp float;
+			#endif
+			
+			#define PI 3.14159265359
+			varying vec2 coords;
+			uniform float time;
+			uniform sampler2D lastFrame;
+			uniform vec2 juliaPoint;
+			//uniform vec2 mouse;
+			//uniform int mouseLeft;
+
+			/////////////////////////////////////////////////////////////////
+			// эта функция вычисляет цвет пикселя, а гоняется она на графическом процессоре
+			void main() {
+				//vec3 seedColor = normalize(vec3(sin(time*1.4765), cos(time*1.9485), sin(time*2.8759)));
+				vec3 seedColor = vec3(sin(time * 10.0), cos(time * 10.0), sin(time * 10.0 + 1.0));
+				if (abs(coords.x * coords.x * coords.x) + abs(coords.y * coords.y * coords.y) > 0.95) {
+					// рисуем цветную рамочку
+					gl_FragColor = vec4(seedColor, 1.0) * 0.5 + 0.5;
+					return;
+				}
+				// формула фрактала Жюлиа
+				//vec2 point = vec2(-1.2560426996087806, -0.3807385921600165) / 4.0;
+				vec2 point = juliaPoint / 4.0;
+				point += vec2(coords.x * coords.x - coords.y * coords.y,
+				              2.0 * coords.x * coords.y);
+				// искажаем предыдущий отрисованный кадр
+				gl_FragColor = texture2D(lastFrame, point + 0.5);
+			}
+		</script>
+
+		<!-- ////////////////////////////////////////////////////////////////// -->
+		<!-- // ну а это и есть наш javascript -->
+		<script type="text/javascript">
+			"use strict";
+			// включаем рисовалку
+			var renderer = new THREE.WebGLRenderer();
+			console.log(renderer);
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			// рисовать будем в эту текстуру
+			var rtTexture = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+				format: THREE.RGBFormat,
+				minFilter: THREE.NearestFilter,
+				magFilter: THREE.NearestFilter,
+				depthBuffer:     false,
+				stencilBuffer:   false,
+				generateMipmaps: false
+			});
+			// а в эту будем копировать нарисованное для последующего фидбэка
+			var rtTexture2 = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+				format: THREE.RGBFormat,
+				//minFilter: THREE.NearestFilter,
+				//magFilter: THREE.NearestFilter,
+				minFilter: THREE.LinearFilter,
+				magFilter: THREE.LinearFilter,
+				depthBuffer:     false,
+				stencilBuffer:   false,
+				generateMipmaps: false
+			});
+			// компилим шейдер
+			var materialToTexture = new THREE.ShaderMaterial({
+				uniforms: {
+					time:       {type: "f", value: 1.0},
+					lastFrame:  {type: "t", value: rtTexture2},
+					juliaPoint: {type: "v2", value: goodPointForJulia()}
+					//resolution: { type: "v2", value: new THREE.Vector2() }
+				},
+				vertexShader:	document.getElementById('vertexShader').textContent,
+				fragmentShader:	document.getElementById('fragmentShader').textContent
+			});
+			// полигон на весь экран
+			var planeGeometry = new THREE.PlaneBufferGeometry(2, 2);
+			// он же с шейдером
+			var planeToTexture = new THREE.Mesh(planeGeometry, materialToTexture);
+			var sceneToTexture = new THREE.Scene();
+			sceneToTexture.add(planeToTexture);
+			// он же просто с текстурой (осторожно, ректально!)
+			var materialToScreen = new THREE.MeshBasicMaterial({
+				map:		rtTexture,
+				shading:	THREE.NoShading
+			});
+			var planeToScreen = new THREE.Mesh(planeGeometry, materialToScreen);
+			var sceneToScreen = new THREE.Scene();
+			sceneToScreen.add(planeToScreen);
+			// камера, экран
+			var camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
+			camera.position.x = 0;
+			camera.position.y = 0;
+			camera.position.z = 1;
+			camera.lookAt(planeToTexture.position);
+			document.body.appendChild(renderer.domElement);
+			//window.addEventListener('resize', onWindowResize, false);
+			// машина времени
+			var myClock = new THREE.Clock(true);
+			var timeOld = 0;
+			//console.log(myClock);
+			// мотор!
+			animate();
+
+			/////////////////////////////////////////////////////////////////
+			// гоняется по кругу
+			function animate() {
+				requestAnimationFrame(animate);
+				var time = myClock.getElapsedTime();
+				//console.log(time);
+				if (time > timeOld + 20.0) {
+					materialToTexture.uniforms.juliaPoint.value = goodPointForJulia();
+					timeOld = time;
+				}
+				materialToTexture.uniforms.time.value = time;
+				renderer.render(sceneToTexture, camera, rtTexture, false);
+				renderer.render(sceneToScreen, camera, rtTexture2, false);  // blit rtTexture to rtTexture2
+				renderer.render(sceneToScreen, camera);
+			}
+
+			/////////////////////////////////////////////////////////////////
+			// принадлежит ли точка множеству Мандельброта
+			function inMBSet(point) {
+				var x = 0.0,
+					y = 0.0;
+				var i, x1;
+				for (i=0; i<100; i++) {
+					x1 = x*x - y*y + point.x;
+					y = 2.0 * x * y + point.y;
+					x = x1;
+				}
+				return Boolean((Math.abs(x) < 2.0) && (Math.abs(y) < 2.0));
+			}
+
+			/////////////////////////////////////////////////////////////////
+			// ищем случайную точку на кривой Мандельброта
+			function goodPointForJulia() {
+				var i;
+				var pointInside = null;
+				var pointOutside = null;
+				var point = new THREE.Vector2(0, 0);
+				// берем одну точку внутри фрактала и одну снаружи
+				while (!(pointInside && pointOutside)) {
+					point.set(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0);
+					if (inMBSet(point))
+						pointInside = point.clone();
+					else
+						pointOutside = point.clone();
+				}
+				//console.log(pointInside, pointOutside);
+				// ищем между ними точку на кривой
+				for (i=0; i<10; i++) {
+					point.lerpVectors(pointInside, pointOutside, 0.5);
+					if (inMBSet(point))
+						pointInside = point.clone();
+					else
+						pointOutside = point.clone();
+				}
+				//console.log(pointInside, pointOutside);
+				//console.log(inMBSet(pointInside));
+				return pointOutside;
+			}
+
+			/////////////////////////////////////////////////////////////////
+			// осторожно, функция временно не работает! не вызывать, иначе всё зависнет!
+			function onWindowResize() {
+				renderer.setSize(window.innerWidth, window.innerHeight);
+			}
+		</script>
+	</body>
+</html>

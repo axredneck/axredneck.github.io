@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="ru">
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+		<title>Санкционный голландский сыр с чудо-плесенью</title>
+		<!-- типа #include <three.js>, это такая знаменитая библиотека для 3Д-графики -->
+		<script type="text/javascript"
+			src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r71/three.min.js">
+		</script>
+		<style>
+			body {
+				/* set margin to 0 and overflow to hidden, 
+				to use the complete page */
+				margin: 0;
+				overflow: hidden;
+			}
+			canvas {
+				width: 100%;
+				height: 100%;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- ////////////////////////////////////////////////////////////////// -->
+		<script id="vertexShader" type="x-shader/x-vertex">
+			varying vec2 texCoords;
+			void main() {
+				gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+				//coords = uv * 2.0 - 1.0;
+				texCoords = uv;
+			}
+		</script>
+
+		<!-- ////////////////////////////////////////////////////////////////// -->
+		<script id="fragmentShader" type="x-shader/x-fragment">
+			//#ifdef GL_ES
+			//precision highp float;
+			//#endif
+			const float SCREENWIDTH = 384.0;  // чем больше, тем мельче детали вдалеке, но и шума тогда больше
+			const float FOV_X = 1.0;  // 1.0 = 90 градусов, 0.5 = 60 градусов итд
+			const float FOV_Y = FOV_X * 0.56;  // пропорци экрана: 0.56 = 9:16, 0.75 = 3:4 итд
+			const float OPENSPACE = 70000.0;  // достаточно открытое пространство
+			const int ITERS_MAX = 49;
+			const vec3 color01 = vec3(1.0, 0.2, 0.1);
+			const vec3 color02 = vec3(0.1, 1.0, 0.1);
+			const vec3 color03 = vec3(0.1, 0.2, 1.0);
+			//const vec2 sincos = vec2(sin(0.2), cos(0.2));
+			varying vec2 texCoords;
+			uniform mat4 eyeMatrix;
+			//uniform mat3 rotMatrix;
+			uniform float scale;  // размер отображений и самого фрактала
+			uniform float boxSize;  // сторона кубического фолда
+			uniform float minSphereSize2;  // квадрат радиуса сферического фолда
+			//float trapDist = 1.0;  // расцвечивание с помощью Orbit Trap
+			//float trapDist2 = 1.0;  // расцвечивание с помощью Orbit Trap
+			//vec3 color;
+
+			/////////////////////////////////////////////////////////////
+			// так называемый Distance Estimator
+			// определяет расстояние от точки-аргумента до ближайшей точки фрактала
+			float de(vec3 p, int iters) {
+				//if (iters < 1) iters = 1;
+				//iters = int(max(float(iters), 1.0));
+				//if (iters > 100) iters = 100;
+				//if (dot(p,p) < 1000000.0) p = mod(p + 10.0, 20.0) - 10.0;  // размножаем фрактал
+				vec4 p_f = vec4(p, 1.0);  // p_f.w=factor
+				//p_f.xyz *= 3.0 / dot(p_f.xyz, p_f.xyz);
+				for (int i = 1; i <= ITERS_MAX; i++) {
+					if (i > iters) break;
+					// кубический фолд:
+					p_f.xyz = clamp(p_f.xyz, -boxSize + 0.1, boxSize + 0.1) * 2.0 - p_f.xyz;
+					//
+					//p_f.xyz = rotMatrix * p_f.xyz;
+					p_f.xyz += vec3(-0.2, -0.1, 0.0);
+					// сферический фолд:
+					float plen2 = dot(p_f.xyz, p_f.xyz);  // квадрат длины вектора
+					p_f *= clamp(max(minSphereSize2 / plen2, minSphereSize2), 0.0, 1.0);
+					p_f = p_f * vec4(vec3(scale), abs(scale)) / minSphereSize2 + vec4(p, 1.0);
+					//
+					//p_f.xy = p_f.yy * sincos + p_f.xx * sincos.yx * vec2(1.0, -1.0);
+					p_f.xyz += vec3(0.1, 0.1, 0.1);
+				}
+				float de2 = length(p_f.xyz) / abs(p_f.w);
+				//return max(de1, de2);
+				return de2;
+			}
+
+			/////////////////////////////////////////////////////////////
+			// расцвечивание с помощью Orbit Trap
+			// точку лучше брать вне фрактала (de(p) > 0.0), иначе цвет может быть рандомным
+			//uniform vec3 trapDistFactor;
+			vec4 colorOf(vec3 p) {
+				vec4 colors = vec4(1.0);
+				//TODO: обойтись без vec4 p_f
+				vec4 p_f = vec4(p, 1.0);  // p_f.w=factor
+				for (int i = 1; i <= 20; i++) {  // много итераций не надо
+					// кубический фолд:
+					p_f.xyz = clamp(p_f.xyz, -boxSize + 0.1, boxSize + 0.1) * 2.0 - p_f.xyz;
+					//
+					//p_f.xyz = rotMatrix * p_f.xyz;
+					p_f.xyz += vec3(-0.2, -0.1, 0.0);
+					// сферический фолд:
+					float plen2 = dot(p_f.xyz, p_f.xyz);  // квадрат длины вектора
+					float plen2_second = dot(p_f.xyz - vec3(0.5), p_f.xyz - vec3(0.5));  // квадрат длины вектора
+					p_f *= clamp(max(minSphereSize2 / plen2, minSphereSize2), 0.0, 1.0);
+					p_f = p_f * vec4(vec3(scale), abs(scale)) / minSphereSize2 + vec4(p, 1.0);
+					// расцвечивание с помощью Orbit Trap:
+					colors.x = min(colors.x, plen2);
+					colors.y = min(colors.y, plen2_second);
+					//colors.y = min(colors.y, dot(p_f.xyz, p_f.xyz));
+					//colors.y = min(colors.y, abs(p_f.x) + abs(p_f.y) + abs(p_f.z));
+					//
+					//p_f.xy = p_f.yy * sincos + p_f.xx * sincos.yx * vec2(1.0, -1.0);
+					p_f.xyz += vec3(0.1, 0.1, 0.1);
+				}
+				//colors.y = exp(-0.01 * length(p_f.xyz - p));
+				//colors.y = atan(dot(p_f.xyz, p_f.xyz) * 0.01);
+				return colors;
+			}
+
+			/////////////////////////////////////////////////////////////
+			// эта функция вычисляет цвет каждого пикселя, а гоняется она на графическом процессоре
+			void main() {
+				vec2 pixel = texCoords * 2.0 - 1.0;
+				pixel *= vec2(FOV_X, FOV_Y);
+				//
+				vec3 camera = vec3(eyeMatrix[3][0], eyeMatrix[3][1], eyeMatrix[3][2]);  // координаты камеры
+				//camera.z = -camera.z;
+				// точка, которую двигаем вдоль луча:
+				//vec3 point = camera;
+				//vec3 dir = mat3(eyeMatrix) * normalize(vec3(-pixel, 1.0));  // направление луча
+				vec3 dir = normalize(mat3(eyeMatrix) * vec3(-pixel, 1.0));  // направление луча
+				float pointDepth = 0.000003;  // в идеале расстояние от камеры до фрактала, при котором луноход ломается
+				vec3 point = camera + dir * pointDepth;
+				//vec3 dir = normalize(vec3(-pixel, 1.0));  // направление луча
+				int steps = 1;
+				//float pointDepth = distance(point, camera);
+				//float minDetail = pointDepth;  // надо ли?
+				float minDetail = max(pointDepth / SCREENWIDTH, 0.0000005);
+				float stepDist = 0.0; // расстояние от луча до геометрии
+				for (int i=0; i<200; i++) {
+					if (stepDist > OPENSPACE) break;  // пока не вышли "в открытый космос"
+					//int iters = 35;
+					// интересный факт: выпуклости на фрактале рендерятся на порядок быстрее, чем впадины
+					//int iters = ITERS_MAX - steps / 2;  // оптимизация для впадин
+					//if (iters < 20) break;
+					pointDepth = distance(point, camera);
+					// TODO: Может, пусть лучше iters зависит от расстояния:
+					int iters = int(min(40.0 / pow(pointDepth, 0.0001), float(ITERS_MAX)));
+					iters -= steps / 5;  // оптимизация для впадин
+					if (iters < 20) break;
+					//float bias = pow(pointDepth, 0.25);
+					//stepDist = de(point, iters) * (0.5 - bias / 10.0) ;  // расстояние, на которое точно можно шагнуть, ни на что не наткнувшись
+					stepDist = de(point, iters) * 0.98;  // расстояние, на которое точно можно шагнуть, ни на что не наткнувшись
+					//stepDist = de(point, iters);  // расстояние, на которое точно можно шагнуть, ни на что не наткнувшись
+					minDetail = max(pointDepth / SCREENWIDTH, 0.0000005);  // ничего мельче пикселя мы не увидим
+					// скопления мельчайших невидимых точек издалека могут казаться сплошным куском из-за высокого minDetail
+					//minDetail = 0.00001;  // фиксированный размер деталей
+					if (stepDist <= minDetail) break;  // уперлись в геометрию
+					pointDepth += stepDist;
+					// шаг не должен идти глубже minDetail целевой точки:
+					//pointDepth += (minDetail - max(pointDepth / SCREENWIDTH, 0.0000005)) * 3.0;
+					point = camera + pointDepth * dir;
+					//iters = int(40 * pow(PRECISION, 0.3) / bias);  // сколько итераций надо
+					//iters = int(35 * pow(2, -pointDepth*0.2));
+					//if (stepDist < pow(30, minDetail) - 1) break;  // уперлись в геометрию + глубина резкости
+					steps++;
+				}
+				//
+				vec4 colors = colorOf(point - dir * minDetail);
+				//vec4 colors = colorOf(point);
+				//vec4 colors = colorOf(point - dir * minDetail * 3.0);
+				vec3 diffuse = mix(mix(color01, color02, colors.y), color03, colors.x);
+				//vec3 atmosphere = vec3(0.003, 0.006, 0.009) / max(1.0, length(point) * 0.005);
+				float stepsDebanded = float(steps) + stepDist / minDetail;
+				vec3 atmosphere = vec3(0.003, 0.006, 0.009);
+				//atmosphere *= pow(pointDepth, 0.2);
+				atmosphere *= min(3.0, pointDepth * 100.0);
+				vec3 glow = vec3(0.5 + stepsDebanded * 0.1);
+				gl_FragColor = vec4(diffuse / glow + atmosphere * glow, 1.0);
+				//gl_FragColor = vec4(diffuse / glow, 1.0);
+			}
+		</script>
+
+		<!-- ////////////////////////////////////////////////////////////////// -->
+		<!-- // ну а это и есть наш javascript -->
+		<script type="text/javascript">
+			"use strict";
+			//var i = 0;  // счетчик для всяких циклов
+			/*var rotMatrix4 = new THREE.Matrix4().makeRotationAxis(
+				new THREE.Vector3(1.0, 0.1, 0.1).normalize(), 0.1);
+			var rotMatrix = new THREE.Matrix3().getNormalMatrix(rotMatrix4);
+			*/
+			var boxSize = 1.0;
+			//var sphereSizeBias = Math.random() * 2.0 * Math.PI;  // начальная форма кубика
+			var animFactor = Math.random() * 2.0 * Math.PI;  // начальная форма кубика
+			var animFactorBias = Math.random() * 0.5;
+			//
+			var minSphereSize2 = 0.2 + Math.sin(animFactor) * 0.15;
+			//var minSphereSize2 = 0.2 + Math.sin(sphereSizeBias) * 0.15;
+			console.log(minSphereSize2);
+			//var minSphereSize2 = 0.25;
+			//var scale = -1.5;
+			//var scaleBias = Math.random() * 2.0 * Math.PI;  // начальная форма кубика
+			//var scale = -1.6 + Math.sin(scaleBias) * 0.15;
+			var scale = -1.6 + Math.cos(animFactor + animFactorBias) * 0.15;
+			// создаем свою камеру (ugly hack)
+			var eye = new THREE.Object3D();
+			var eyeVelocity = new THREE.Vector3();
+			var deDesired;
+			eyeInit();
+			// включаем рисовалку
+			var renderer = new THREE.WebGLRenderer();
+			onWindowResize();
+			// компилим шейдер
+			var materialFractal = new THREE.ShaderMaterial({
+				uniforms: {
+					//time:		{type: "f", value: 1.0},
+					//resolution: { type: "v2", value: new THREE.Vector2() }
+					eyeMatrix:      {type: "m4", value: eye.matrix},
+					//rotMatrix:      {type: "m3", value: rotMatrix},
+					scale:          {type: "f",  value: scale},
+					boxSize:        {type: "f",  value: boxSize},
+					minSphereSize2: {type: "f",  value: minSphereSize2}
+				},
+				vertexShader:	document.getElementById('vertexShader').textContent,
+				fragmentShader:	document.getElementById('fragmentShader').textContent
+			});
+			// полигон на весь экран
+			//TODO: использовать deferred rendering вместо этого
+			var planeGeometry = new THREE.PlaneBufferGeometry(2, 2);
+			var planeToScreen = new THREE.Mesh(planeGeometry, materialFractal);
+			var sceneToScreen = new THREE.Scene();
+			sceneToScreen.add(planeToScreen);
+			// экран
+			var cameraOrtho = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
+			cameraOrtho.position.set(0.0, 0.0, 1.0);
+			cameraOrtho.lookAt(planeToScreen.position);
+			document.body.appendChild(renderer.domElement);
+			window.addEventListener('resize', onWindowResize, false);
+			// машина времени
+			var myClock = new THREE.Clock(true);
+			console.log(myClock);
+			// мотор!
+			animate();
+			draw();
+
+			/////////////////////////////////////////////////////////////////
+			// управление камерой, гоняется по кругу
+			function animate() {
+				// машина времени
+				setTimeout(function() {
+					requestAnimationFrame(animate);
+				}, 1000 / 50);
+				// готовим униформы для шейдера:
+				eye.updateMatrix();
+				scale          = -1.6 + Math.sin(
+					myClock.getElapsedTime() * 0.001 + animFactor                 ) * 0.15;
+				minSphereSize2 =  0.2 + Math.cos(
+					myClock.getElapsedTime() * 0.001 + animFactor + animFactorBias) * 0.15;
+				materialFractal.uniforms.scale.value = scale;
+				materialFractal.uniforms.minSphereSize2.value = minSphereSize2;
+				// прекомпьют тяжелых функций:
+				var deCurrent = de(eye.position);
+				var deGradientCurrent = deGradient(eye.position);
+				if (deCurrent < deDesired * 0.01) eyeInit();  // разбились
+				// трение об воздух:
+				eyeVelocity.multiplyScalar(0.94);
+				// ускорение к фракталу:
+				if (deDesired > 0.0003) deDesired *= 0.96;
+				eyeVelocity.add(deGradientCurrent.clone().setLength(0.001 * (deCurrent - deDesired)));
+				// движение вдоль поверхности:
+				var dirSide = new THREE.Vector3(1.0, 0.0, 0.0).applyQuaternion(eye.quaternion);
+				var horizontalVelocity = Math.max(0.000001, Math.min(deCurrent, 1.0) * 0.002);
+				eyeVelocity.add(dirSide.cross(deGradientCurrent).setLength(horizontalVelocity));
+				/*
+				if (deGradientCurrent.lengthSq() > 1e-10)
+					eyeVelocity.add(dirSide.cross(deGradientCurrent).setLength(0.000001));
+				else  // не знаем направление на фрактал, едем прямо
+					eyeVelocity.add(eyeVelocity.clone().setLength(0.0000001));
+				*/
+				// двигаем камеру
+				var dirUp = new THREE.Vector3(0.0, 1.0, 0.0).applyQuaternion(eye.quaternion);;
+				var eyePosNew = eye.position.clone();
+				eyePosNew.add(eyeVelocity);
+				eye.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(
+					eyePosNew, eye.position, deGradientCurrent.clone().setLength(3.0).add(dirUp)));
+				eye.position.copy(eyePosNew);
+			}
+
+			/////////////////////////////////////////////////////////////////
+			// отрисовка, гоняется по кругу
+			function draw() {
+				// машина времени
+				setTimeout(function() {
+					requestAnimationFrame(draw);
+				}, 1000 / 35);
+				//
+				renderer.render(sceneToScreen, cameraOrtho);
+			}
+
+			/////////////////////////////////////////////////////////////
+			// инициализация камеры
+			function eyeInit() {
+				deDesired = 10.0;
+				eye.position.set(Math.random(), Math.random(), Math.random());
+				eye.position.addScalar(-0.5);
+				eye.position.setLength(deDesired + 1.0);  // относим от фрактала
+				//eye.lookAt(new THREE.Vector3(0.0, 0.0, 0.0));
+				eye.updateMatrix();
+				//eyeVelocity = new THREE.Vector3(0.0, 0.0, 0.0);  // в начале стоим на месте
+				eyeVelocity.set(Math.random(), Math.random(), Math.random());
+				eyeVelocity.addScalar(-0.5);
+				/*
+				var i;
+				for (i = 0; i < 3; i++)
+					eyeVelocity.setComponent(i, Math.random() - 0.5);
+				*/
+				eyeVelocity.setLength(0.01);
+			}
+
+			/////////////////////////////////////////////////////////////
+			// Distance Estimator - javascript-версия
+			function de(point) {
+				//if (dot(p,p) < 1000000.0) p = mod(p + 10.0, 20.0) - 10.0;  // размножаем фрактал
+				var p = point.clone();
+				var factor = 1.0;
+				var i;
+				for (i = 0; i < 22; i++) {
+					// кубический фолд:
+					var p2 = p.clone().clampScalar(-boxSize + 0.1, boxSize + 0.1).multiplyScalar(2.0);
+					p.sub(p2.clone()).negate();
+					//
+					//p.applyMatrix3(rotMatrix);
+					p.add(new THREE.Vector3(-0.2, -0.1, 0.0));
+					// сферический фолд:
+					var plen2 = p.lengthSq();
+					if (plen2 < 1.0) {
+						p.multiplyScalar(1.0 / Math.max(plen2, minSphereSize2));
+						factor /= Math.max(plen2, minSphereSize2);
+					}
+					p.multiplyScalar(scale).add(point);
+					factor = factor * Math.abs(scale) + 1.0;
+					//
+					p.add(new THREE.Vector3(0.1, 0.1, 0.1));
+				}
+				return p.length() / Math.abs(factor);
+			}
+
+			/////////////////////////////////////////////////////////////
+			// направление из точки на фрактал
+			function deGradient(point) {
+				var sample1, sample2;
+				var result = new THREE.Vector3(0.0, 0.0, 0.0);
+				var dist = de(point);  // расстояние до выборок
+				var i;
+				for (i = 0; i < 3; i++) {
+					sample1 = point.clone();
+					sample1.setComponent(i, sample1.getComponent(i) + dist);
+					sample2 = point.clone();
+					sample2.setComponent(i, sample2.getComponent(i) - dist);
+					result.setComponent(i, (de(sample2) - de(sample1)) / 2.0);
+				}
+				return result;
+			}
+
+			/////////////////////////////////////////////////////////////////
+			function onWindowResize() {
+				renderer.setSize(window.innerWidth / 5, window.innerHeight / 5, false);
+			}
+
+		</script>
+	</body>
+</html>
